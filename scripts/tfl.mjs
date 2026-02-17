@@ -96,7 +96,12 @@ const TUBE_LINES = {
 
 const OTHER_LINES = {
   dlr:               { name: 'DLR',                emoji: '\u{1F688}', type: 'Docklands Light Railway' },
-  'london-overground': { name: 'London Overground', emoji: '\u{1F69D}', type: 'Overground rail' },
+  liberty:           { name: 'Liberty',             emoji: '\u{1F69D}', type: 'Overground (Romford — Upminster)' },
+  lioness:           { name: 'Lioness',             emoji: '\u{1F69D}', type: 'Overground (Watford — Euston)' },
+  mildmay:           { name: 'Mildmay',             emoji: '\u{1F69D}', type: 'Overground (Stratford — Richmond/Clapham)' },
+  suffragette:       { name: 'Suffragette',         emoji: '\u{1F69D}', type: 'Overground (Gospel Oak — Barking)' },
+  weaver:            { name: 'Weaver',              emoji: '\u{1F69D}', type: 'Overground (Liverpool St — Enfield/Cheshunt/Chingford)' },
+  windrush:          { name: 'Windrush',            emoji: '\u{1F69D}', type: 'Overground (Highbury — Crystal Palace/Clapham/W Croydon)' },
   elizabeth:         { name: 'Elizabeth line',      emoji: '\u{1F49C}', type: 'Crossrail' },
   tram:              { name: 'London Trams',        emoji: '\u{1F68B}', type: 'Croydon Tramlink' },
 };
@@ -122,7 +127,7 @@ const LINE_ALIASES = {
   pic: 'piccadilly', picc: 'piccadilly',
   vic: 'victoria',
   'waterloo': 'waterloo-city', wat: 'waterloo-city', 'w&c': 'waterloo-city',
-  overground: 'london-overground', over: 'london-overground',
+  overground: 'lioness', over: 'lioness',
   liz: 'elizabeth', crossrail: 'elizabeth', xr: 'elizabeth',
 };
 
@@ -488,11 +493,12 @@ async function cmdDisruptions(opts) {
     url = apiUrl(`/Line/${encodeURIComponent(lineId)}/Disruption`);
   } else {
     // Get disruptions for all Tube + rail lines
+    // TfL expects comma-separated line IDs unencoded in the path
     const allLineIds = [
       ...Object.keys(TUBE_LINES),
       ...Object.keys(OTHER_LINES),
     ].join(',');
-    url = apiUrl(`/Line/${encodeURIComponent(allLineIds)}/Disruption`);
+    url = apiUrl(`/Line/${allLineIds}/Disruption`);
   }
 
   const data = await fetchJSON(url);
@@ -513,14 +519,16 @@ async function cmdDisruptions(opts) {
     const affectedLines = (d.affectedRoutes || []).map(r => r.name).filter(Boolean);
     const closureText = d.closureText || '';
 
+    const categoryDesc = d.categoryDescription || category || 'Disruption';
+
     let icon = '\u{1F7E1}';
-    if (category === 'RealTime' || category.includes('Severe')) icon = '\u{1F534}';
+    if (category === 'RealTime' || categoryDesc.includes('Severe')) icon = '\u{1F534}';
     else if (category === 'PlannedWork') icon = '\u{1F7E0}';
     else if (category === 'Information') icon = '\u{1F535}';
 
-    console.log(`${icon} ${category || 'Disruption'}`);
+    console.log(`${icon} ${categoryDesc}`);
     if (affectedLines.length) console.log(`   Lines: ${affectedLines.join(', ')}`);
-    if (closureText) console.log(`   ${closureText}`);
+    if (closureText && closureText !== categoryDesc) console.log(`   ${closureText}`);
     if (desc) {
       const shortDesc = desc.length > 400 ? desc.slice(0, 400) + '...' : desc;
       console.log(`   ${shortDesc}`);
@@ -704,9 +712,18 @@ async function cmdRouteInfo(opts) {
   const name = data?.lineName || targetLine;
   console.log(`\n=== ${name} Route ===\n`);
 
-  const sequences = data?.orderedLineRoutes || data?.stopPointSequences || [];
+  // stopPointSequences has the actual stop data; orderedLineRoutes has branch names
+  const sequences = data?.stopPointSequences || [];
   if (!sequences.length) {
-    console.log('No route sequence data available.');
+    // Fall back to orderedLineRoutes for branch names only
+    const branches = data?.orderedLineRoutes || [];
+    if (branches.length) {
+      for (const b of branches) {
+        console.log(`  ${b.name || 'Route'}`);
+      }
+    } else {
+      console.log('No route sequence data available.');
+    }
     return;
   }
 

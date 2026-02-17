@@ -131,7 +131,12 @@ Basic functionality works without a key (rate-limited). For 500 requests/minute:
 | Line ID | Name | Type |
 |---------|------|------|
 | dlr | DLR | Docklands Light Railway |
-| london-overground | London Overground | Overground rail |
+| liberty | Liberty | Overground (Romford — Upminster) |
+| lioness | Lioness | Overground (Watford — Euston) |
+| mildmay | Mildmay | Overground (Stratford — Richmond/Clapham) |
+| suffragette | Suffragette | Overground (Gospel Oak — Barking) |
+| weaver | Weaver | Overground (Liverpool St — Enfield/Cheshunt/Chingford) |
+| windrush | Windrush | Overground (Highbury — Crystal Palace/Clapham/W Croydon) |
 | elizabeth | Elizabeth line | Crossrail |
 | tram | London Trams | Croydon Tramlink |
 

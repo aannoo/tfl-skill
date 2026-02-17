@@ -189,19 +189,38 @@ node scripts/tfl.mjs stops --near 51.5074,-0.1278 --radius 500
 
 ## Tube Lines Reference
 
-| ID | Line | Emoji | Terminals |
-|----|------|-------|-----------|
-| bakerloo | Bakerloo | Brown | Harrow & Wealdstone <-> Elephant & Castle |
-| central | Central | Red | Epping / Ealing Broadway <-> West Ruislip |
-| circle | Circle | Yellow | Hammersmith (loop via Liverpool Street) |
-| district | District | Green | Richmond / Ealing Broadway <-> Upminster |
-| hammersmith-city | Hammersmith & City | Pink | Hammersmith <-> Barking |
-| jubilee | Jubilee | Silver | Stanmore <-> Stratford |
-| metropolitan | Metropolitan | Magenta | Chesham / Amersham / Uxbridge <-> Aldgate |
-| northern | Northern | Black | Edgware / High Barnet <-> Morden / Battersea |
-| piccadilly | Piccadilly | Dark Blue | Heathrow T5 / Uxbridge <-> Cockfosters |
-| victoria | Victoria | Light Blue | Walthamstow Central <-> Brixton |
-| waterloo-city | Waterloo & City | Teal | Waterloo <-> Bank |
+| ID | Line | Terminals |
+|----|------|-----------|
+| bakerloo | Bakerloo | Harrow & Wealdstone <-> Elephant & Castle |
+| central | Central | Epping / Ealing Broadway <-> West Ruislip |
+| circle | Circle | Hammersmith (loop via Liverpool Street) |
+| district | District | Richmond / Ealing Broadway <-> Upminster |
+| hammersmith-city | Hammersmith & City | Hammersmith <-> Barking |
+| jubilee | Jubilee | Stanmore <-> Stratford |
+| metropolitan | Metropolitan | Chesham / Amersham / Uxbridge <-> Aldgate |
+| northern | Northern | Edgware / High Barnet <-> Morden / Battersea |
+| piccadilly | Piccadilly | Heathrow T5 / Uxbridge <-> Cockfosters |
+| victoria | Victoria | Walthamstow Central <-> Brixton |
+| waterloo-city | Waterloo & City | Waterloo <-> Bank |
+
+### London Overground Lines
+
+| ID | Line | Route |
+|----|------|-------|
+| liberty | Liberty | Romford — Upminster |
+| lioness | Lioness | Watford — Euston |
+| mildmay | Mildmay | Stratford — Richmond / Clapham Junction |
+| suffragette | Suffragette | Gospel Oak — Barking Riverside |
+| weaver | Weaver | Liverpool Street — Enfield / Cheshunt / Chingford |
+| windrush | Windrush | Highbury & Islington — Crystal Palace / Clapham / West Croydon |
+
+### Other TfL Rail
+
+| ID | Line | Type |
+|----|------|------|
+| dlr | DLR | Docklands Light Railway |
+| elizabeth | Elizabeth line | Crossrail |
+| tram | London Trams | Croydon Tramlink |
 
 ---
 
