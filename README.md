@@ -342,8 +342,6 @@ Peak: Mon-Fri 6:30-9:30am and 4:00-7:00pm (except public holidays).
 **Created for:** ClawdHub / OpenClaw
 **License:** MIT
 
-**Built by:** [Brian Leach](https://github.com/brianleach)
-
 **Credits:**
 - Transit data provided by [Transport for London (TfL)](https://tfl.gov.uk)
 - Powered by the TfL Unified API
