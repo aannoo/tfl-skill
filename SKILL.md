@@ -4,18 +4,13 @@ description: London TfL transit — real-time Tube arrivals, bus predictions, li
 homepage: "https://github.com/brianleach/tfl-skill"
 license: MIT
 metadata:
-  clawdbot:
+  openclaw:
     emoji: "\U0001F1EC\U0001F1E7"
     tags: [transit, london, tfl, transportation, tube, underground, bus, train, schedule]
+    primaryEnv: TFL_API_KEY
     requires:
       bins: ["node"]
-      env: ["TFL_API_KEY"]
     files: ["scripts/tfl.mjs"]
-    install:
-      - id: npm-deps
-        kind: shell
-        command: "npm install --prefix $SKILL_DIR"
-        label: "Install Node.js dependencies"
 ---
 
 # TfL London Transit
