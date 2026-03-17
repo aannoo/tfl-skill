@@ -61,7 +61,17 @@ function apiUrl(endpoint) {
     : `${TFL_BASE}${endpoint}`;
 }
 
-async function fetchJSON(url) {
+// ---------------------------------------------------------------------------
+// Simple in-memory cache (TTL-based, avoids redundant API calls in one run)
+// ---------------------------------------------------------------------------
+const _cache = new Map();
+const CACHE_TTL_MS = 30_000; // 30 seconds
+
+async function fetchJSON(url, { cacheTtl = CACHE_TTL_MS } = {}) {
+  const now = Date.now();
+  const cached = _cache.get(url);
+  if (cached && (now - cached.ts) < cacheTtl) return cached.data;
+
   const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
   if (resp.status === 429) {
     throw new Error('Rate limited by TfL API. Set TFL_API_KEY for 500 requests/minute. Get a free key at: https://api-portal.tfl.gov.uk/');
@@ -74,7 +84,9 @@ async function fetchJSON(url) {
     } catch {}
     throw new Error(msg);
   }
-  return resp.json();
+  const data = await resp.json();
+  _cache.set(url, { data, ts: now });
+  return data;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +124,25 @@ function lineEmoji(lineId) {
 
 function lineName(lineId) {
   return TUBE_LINES[lineId]?.name || OTHER_LINES[lineId]?.name || lineId;
+}
+
+/** Mode-level emoji for headers and labels */
+function modeEmoji(mode) {
+  if (!mode) return '🚇';
+  const m = mode.toLowerCase();
+  if (m === 'tube' || m === 'underground') return '🚇';
+  if (m === 'bus') return '🚌';
+  if (m === 'dlr' || m === 'overground' || m === 'elizabeth-line' || m === 'national-rail') return '🚆';
+  if (m === 'tram') return '🚊';
+  if (m === 'walking') return '🚶';
+  if (m === 'cycle') return '🚴';
+  return '🚇';
+}
+
+/** Output as JSON or formatted text. When --json is active, collect results and print at end. */
+let JSON_MODE = false;
+function outputJSON(data) {
+  console.log(JSON.stringify(data, null, 2));
 }
 
 // Line ID aliases for user-friendly matching
@@ -272,13 +303,31 @@ async function cmdStatus(opts) {
 
   const data = await fetchJSON(url);
   if (!data || data.length === 0) {
+    if (JSON_MODE) return outputJSON({ lines: [], error: 'No line status data available' });
     console.log('No line status data available.');
     return;
   }
 
   const lines = Array.isArray(data) ? data : [data];
+
+  if (JSON_MODE) {
+    const result = lines.map(line => ({
+      id: line.id,
+      name: line.name || line.id,
+      statuses: (line.lineStatuses || []).map(s => ({
+        severity: s.statusSeverityDescription || 'Unknown',
+        severityLevel: s.statusSeverity,
+        reason: s.reason || null,
+      })),
+    }));
+    return outputJSON({ lines: result });
+  }
+
+  const headerEmoji = lineId
+    ? lineEmoji(lineId)
+    : showAll ? '🚇' : '🚇';
   const label = lineId ? `${lineName(lineId)} Status` : showAll ? 'All TfL Lines Status' : 'Tube Status';
-  console.log(`\n=== ${label} ===\n`);
+  console.log(`\n${headerEmoji} === ${label} ===\n`);
 
   for (const line of lines) {
     const id = line.id || '';
@@ -380,7 +429,21 @@ async function cmdArrivals(opts) {
   arrivals.sort((a, b) => (a.timeToStation || 0) - (b.timeToStation || 0));
 
   const stationLabel = arrivals[0]?.stationName || naptanId;
-  console.log(`\n=== Arrivals at: ${stationLabel} ===\n`);
+
+  if (JSON_MODE) {
+    const result = arrivals.slice(0, 20).map(a => ({
+      line: a.lineName || a.lineId || null,
+      lineId: a.lineId || null,
+      destination: a.destinationName || a.towards || null,
+      minutesAway: Math.round((a.timeToStation || 0) / 60),
+      expectedArrival: a.expectedArrival || null,
+      platform: a.platformName || null,
+      currentLocation: a.currentLocation || null,
+    }));
+    return outputJSON({ station: stationLabel, naptanId, arrivals: result });
+  }
+
+  console.log(`\n🚇 === Arrivals at: ${stationLabel} ===\n`);
 
   for (const a of arrivals.slice(0, 20)) {
     const emoji = lineEmoji(a.lineId);
@@ -461,7 +524,18 @@ async function cmdBusArrivals(opts) {
   arrivals.sort((a, b) => (a.timeToStation || 0) - (b.timeToStation || 0));
 
   const stopLabel = arrivals[0]?.stationName || stopId;
-  console.log(`\n=== Bus Arrivals at: ${stopLabel} (${stopId}) ===\n`);
+
+  if (JSON_MODE) {
+    const result = arrivals.slice(0, 20).map(a => ({
+      route: a.lineName || a.lineId || null,
+      destination: a.destinationName || a.towards || null,
+      minutesAway: Math.round((a.timeToStation || 0) / 60),
+      expectedArrival: a.expectedArrival || null,
+    }));
+    return outputJSON({ stop: stopLabel, stopId, arrivals: result });
+  }
+
+  console.log(`\n🚌 === Bus Arrivals at: ${stopLabel} (${stopId}) ===\n`);
 
   for (const a of arrivals.slice(0, 20)) {
     const route = a.lineName || a.lineId || '?';
@@ -476,7 +550,7 @@ async function cmdBusArrivals(opts) {
 
     const expectedTime = a.expectedArrival ? fmtTime24(toLondonDate(new Date(a.expectedArrival))) : '';
 
-    console.log(`  \u{1F68C} Route ${route} \u2192 ${dest}`);
+    console.log(`  🚌 Route ${route} \u2192 ${dest}`);
     console.log(`     ${expectedTime ? expectedTime + ' ' : ''}(${etaStr})`);
     console.log();
   }
@@ -510,8 +584,20 @@ async function cmdDisruptions(opts) {
   }
 
   const disruptions = Array.isArray(data) ? data : [data];
+
+  if (JSON_MODE) {
+    const result = disruptions.map(d => ({
+      category: d.category || null,
+      categoryDescription: d.categoryDescription || d.category || null,
+      description: d.description || null,
+      closureText: d.closureText || null,
+      affectedLines: (d.affectedRoutes || []).map(r => r.name).filter(Boolean),
+    }));
+    return outputJSON({ disruptions: result, count: result.length });
+  }
+
   const label = lineId ? `${lineName(lineId)} Disruptions` : 'TfL Disruptions';
-  console.log(`\n=== ${label} (${disruptions.length} active) ===\n`);
+  console.log(`\n⚠️ === ${label} (${disruptions.length} active) ===\n`);
 
   for (const d of disruptions) {
     const category = d.category || '';
@@ -542,13 +628,27 @@ async function cmdDisruptions(opts) {
 async function cmdRoutes(opts) {
   const showAll = opts.all;
 
-  console.log('\n=== Tube Lines ===\n');
+  if (JSON_MODE) {
+    const result = {
+      tube: Object.entries(TUBE_LINES).map(([id, line]) => ({
+        id, name: line.name, terminals: line.terminals,
+      })),
+    };
+    if (showAll) {
+      result.other = Object.entries(OTHER_LINES).map(([id, line]) => ({
+        id, name: line.name, type: line.type,
+      }));
+    }
+    return outputJSON(result);
+  }
+
+  console.log('\n🚇 === Tube Lines ===\n');
   for (const [id, line] of Object.entries(TUBE_LINES)) {
     console.log(`  ${line.emoji} ${line.name.padEnd(20)} ${line.terminals.join(' \u2194 ')}`);
   }
 
   if (showAll) {
-    console.log('\n=== Other TfL Rail ===\n');
+    console.log('\n🚆 === Other TfL Rail ===\n');
     for (const [id, line] of Object.entries(OTHER_LINES)) {
       console.log(`  ${line.emoji} ${line.name.padEnd(20)} ${line.type}`);
     }
@@ -575,7 +675,12 @@ async function cmdBusRoutes(opts) {
     return an - bn || (a.name || '').localeCompare(b.name || '');
   });
 
-  console.log(`\n=== TfL Bus Routes (${routes.length}) ===\n`);
+  if (JSON_MODE) {
+    const result = routes.map(r => ({ name: r.name || r.id, id: r.id }));
+    return outputJSON({ routes: result, count: result.length });
+  }
+
+  console.log(`\n🚌 === TfL Bus Routes (${routes.length}) ===\n`);
 
   for (const r of routes) {
     console.log(`  ${(r.name || r.id || '?').padStart(5)} | ${r.id}`);
@@ -597,14 +702,25 @@ async function cmdStops(opts) {
     const data = await fetchJSON(url);
 
     if (!data || data.length === 0) {
+      if (JSON_MODE) return outputJSON({ stops: [], line: lineId });
       console.log(`No stops found for ${lineName(lineId)}.`);
       return;
     }
 
     const stops = Array.isArray(data) ? data : [data];
-    console.log(`\n=== Stops on ${lineName(lineId)} (${stops.length}) ===\n`);
+
+    if (JSON_MODE) {
+      const result = stops.map(s => ({
+        name: s.commonName || s.id,
+        naptanId: s.naptanId || s.id,
+        lat: s.lat, lon: s.lon,
+      }));
+      return outputJSON({ line: lineName(lineId), stops: result });
+    }
+
+    console.log(`\n📍 === Stops on ${lineName(lineId)} (${stops.length}) ===\n`);
     for (const s of stops) {
-      console.log(`  \u{1F4CD} ${s.commonName || s.id}`);
+      console.log(`  📍 ${s.commonName || s.id}`);
       console.log(`     ID: ${s.naptanId || s.id}  |  (${s.lat}, ${s.lon})`);
       console.log();
     }
@@ -614,32 +730,38 @@ async function cmdStops(opts) {
   if (searchQuery) {
     // First try embedded stations
     const localMatches = searchStation(searchQuery);
-    if (localMatches.length) {
-      console.log(`\n=== Stations matching '${searchQuery}' (${localMatches.length} local matches) ===\n`);
-      for (const s of localMatches.slice(0, 20)) {
-        console.log(`  \u{1F4CD} ${s.name}`);
-        console.log(`     ID: ${s.naptanId}`);
-        console.log();
-      }
-    }
 
     // Also search TfL API for more results
     const searchUrl = apiUrl(`/StopPoint/Search/${encodeURIComponent(searchQuery)}?modes=tube,bus,dlr,overground,elizabeth-line,tram`);
     const searchData = await fetchJSON(searchUrl);
     const matches = searchData?.matches || [];
+    const localIds = new Set(localMatches.map(s => s.naptanId));
+    const apiOnly = matches.filter(m => !localIds.has(m.id));
 
-    if (matches.length) {
-      // Filter out any we already showed from local data
-      const localIds = new Set(localMatches.map(s => s.naptanId));
-      const apiOnly = matches.filter(m => !localIds.has(m.id));
-      if (apiOnly.length) {
-        console.log(`=== Additional TfL results (${apiOnly.length}) ===\n`);
-        for (const s of apiOnly.slice(0, 15)) {
-          console.log(`  \u{1F4CD} ${s.name}`);
-          console.log(`     ID: ${s.id}`);
-          if (s.modes?.length) console.log(`     Modes: ${s.modes.join(', ')}`);
-          console.log();
-        }
+    if (JSON_MODE) {
+      const result = [
+        ...localMatches.slice(0, 20).map(s => ({ name: s.name, naptanId: s.naptanId, source: 'local' })),
+        ...apiOnly.slice(0, 15).map(s => ({ name: s.name, naptanId: s.id, modes: s.modes || [], source: 'api' })),
+      ];
+      return outputJSON({ query: searchQuery, stops: result });
+    }
+
+    if (localMatches.length) {
+      console.log(`\n🔍 === Stations matching '${searchQuery}' (${localMatches.length} local matches) ===\n`);
+      for (const s of localMatches.slice(0, 20)) {
+        console.log(`  📍 ${s.name}`);
+        console.log(`     ID: ${s.naptanId}`);
+        console.log();
+      }
+    }
+
+    if (apiOnly.length) {
+      console.log(`🔍 === Additional TfL results (${apiOnly.length}) ===\n`);
+      for (const s of apiOnly.slice(0, 15)) {
+        console.log(`  📍 ${s.name}`);
+        console.log(`     ID: ${s.id}`);
+        if (s.modes?.length) console.log(`     Modes: ${s.modes.join(', ')}`);
+        console.log();
       }
     }
 
@@ -667,11 +789,22 @@ async function cmdStops(opts) {
     // Sort by distance
     stops.sort((a, b) => (a.distance || 0) - (b.distance || 0));
 
-    console.log(`\n=== Nearby Stops (${stops.length} within ${radius}m) ===\n`);
+    if (JSON_MODE) {
+      const result = stops.slice(0, 20).map(s => ({
+        name: s.commonName || s.id,
+        naptanId: s.naptanId || s.id,
+        distance: s.distance != null ? Math.round(s.distance) : null,
+        modes: s.modes || [],
+        lat: s.lat, lon: s.lon,
+      }));
+      return outputJSON({ nearby: result, radius, center: { lat, lon } });
+    }
+
+    console.log(`\n📍 === Nearby Stops (${stops.length} within ${radius}m) ===\n`);
     for (const s of stops.slice(0, 20)) {
       const dist = s.distance != null ? ` \u2014 ${Math.round(s.distance)}m` : '';
       const modes = s.modes?.length ? ` [${s.modes.join(', ')}]` : '';
-      console.log(`  \u{1F4CD} ${s.commonName || s.id}${dist}${modes}`);
+      console.log(`  📍 ${s.commonName || s.id}${dist}${modes}`);
       console.log(`     ID: ${s.naptanId || s.id}`);
       console.log();
     }
@@ -710,12 +843,24 @@ async function cmdRouteInfo(opts) {
   }
 
   const name = data?.lineName || targetLine;
-  console.log(`\n=== ${name} Route ===\n`);
 
-  // stopPointSequences has the actual stop data; orderedLineRoutes has branch names
   const sequences = data?.stopPointSequences || [];
+
+  if (JSON_MODE) {
+    const result = sequences.map(seq => ({
+      branch: seq.name || seq.direction || null,
+      stops: (seq.stopPoint || []).map(s => ({
+        name: s.name || s.commonName || s.id,
+        naptanId: s.id || null,
+      })),
+    }));
+    return outputJSON({ line: name, sequences: result });
+  }
+
+  const emoji = lineEmoji(targetLine);
+  console.log(`\n${emoji} === ${name} Route ===\n`);
+
   if (!sequences.length) {
-    // Fall back to orderedLineRoutes for branch names only
     const branches = data?.orderedLineRoutes || [];
     if (branches.length) {
       for (const b of branches) {
@@ -764,11 +909,31 @@ async function cmdJourney(opts) {
 
   const journeys = data?.journeys || [];
   if (!journeys.length) {
+    if (JSON_MODE) return outputJSON({ journeys: [], from: opts.from, to: opts.to });
     console.log('No journey results found.');
     return;
   }
 
-  console.log(`\n=== Journey: ${opts.from} \u2192 ${opts.to} ===\n`);
+  if (JSON_MODE) {
+    const result = journeys.slice(0, 3).map(j => ({
+      duration: j.duration,
+      startTime: j.startDateTime || null,
+      arrivalTime: j.arrivalDateTime || null,
+      fare: j.fare?.totalCost ? (j.fare.totalCost / 100).toFixed(2) : null,
+      legs: (j.legs || []).map(leg => ({
+        mode: leg.mode?.name || leg.mode?.id || null,
+        line: leg.routeOptions?.[0]?.name || null,
+        direction: leg.routeOptions?.[0]?.directions?.[0] || null,
+        from: leg.departurePoint?.commonName || null,
+        to: leg.arrivalPoint?.commonName || null,
+        duration: leg.duration || null,
+        stops: (leg.path?.stopPoints || []).length,
+      })),
+    }));
+    return outputJSON({ from: opts.from, to: opts.to, journeys: result });
+  }
+
+  console.log(`\n🗺️ === Journey: ${opts.from} \u2192 ${opts.to} ===\n`);
 
   for (let j = 0; j < Math.min(journeys.length, 3); j++) {
     const journey = journeys[j];
@@ -852,7 +1017,7 @@ function main() {
   const command = args[0];
 
   if (!command || command === '--help' || command === '-h') {
-    console.log(`TfL London Transit \u2014 OpenClaw Skill
+    console.log(`🚇 TfL London Transit — OpenClaw Skill
 
 Commands:
   status          Tube line status [--line LINE] [--all]
@@ -864,6 +1029,9 @@ Commands:
   stops           Search stops (--search NAME | --near LAT,LON [--radius M] | --line LINE)
   route-info      Route stops (--line LINE | --route NUM)
   journey         Plan a journey (--from PLACE --to PLACE)
+
+Global Options:
+  --json          Output structured JSON instead of formatted text
 
 Tube Lines: bakerloo, central, circle, district, hammersmith-city, jubilee,
             metropolitan, northern, piccadilly, victoria, waterloo-city
@@ -887,6 +1055,7 @@ Environment: TFL_API_KEY (optional, free, from api-portal.tfl.gov.uk)`);
     from: { type: 'string' },
     to: { type: 'string' },
     all: { type: 'boolean' },
+    json: { type: 'boolean' },
   };
 
   let opts = {};
@@ -897,6 +1066,9 @@ Environment: TFL_API_KEY (optional, free, from api-portal.tfl.gov.uk)`);
     console.error(`Error parsing arguments: ${err.message}`);
     process.exit(1);
   }
+
+  // Set global JSON mode
+  if (opts.json) JSON_MODE = true;
 
   const handlers = {
     status: () => cmdStatus(opts),
