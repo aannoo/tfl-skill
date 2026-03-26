@@ -2,7 +2,7 @@
 /**
  * TfL London Transit — OpenClaw Skill
  * Real-time Tube arrivals, bus predictions, line status, disruptions,
- * journey planning, and route info for the London Underground, DLR,
+ * journey planning, route info, and scheduled timetable lookups for the London Underground, DLR,
  * Overground, Elizabeth line, buses, and trams.
  * Uses TfL's Unified API (single REST JSON API for all modes).
  *
@@ -48,9 +48,10 @@ let _keyWarningShown = false;
 function noteApiKey() {
   if (!TFL_API_KEY && !_keyWarningShown) {
     _keyWarningShown = true;
-    console.log('Note: TFL_API_KEY not set. Requests are rate-limited.');
-    console.log('Get a free key at: https://api-portal.tfl.gov.uk/');
-    console.log('With a key you get 500 requests/minute.\n');
+    if (JSON_MODE) return;
+    console.error('Note: TFL_API_KEY not set. Requests are rate-limited.');
+    console.error('Get a free key at: https://api-portal.tfl.gov.uk/');
+    console.error('With a key you get 500 requests/minute.\n');
   }
 }
 
@@ -203,11 +204,15 @@ const STATIONS = [
   { naptanId: '940GZZLUWYP', name: 'Wembley Park', aliases: ['wembley', 'wembley stadium'] },
   { naptanId: '940GZZLUTFP', name: 'Tufnell Park', aliases: ['tufnell park'] },
   { naptanId: '940GZZLUHBT', name: 'High Barnet', aliases: ['high barnet', 'barnet'] },
-  { naptanId: '940GZZLUEAC', name: 'East Acton', aliases: ['east acton'] },
+  { naptanId: '940GZZLUEAC', name: 'Elephant & Castle', aliases: ['elephant & castle', 'elephant and castle', 'elephant'] },
+  { naptanId: '940GZZLUEAN', name: 'East Acton', aliases: ['east acton'] },
   { naptanId: '940GZZLUKNG', name: 'Kennington', aliases: ['kennington'] },
   { naptanId: '940GZZLUSKW', name: 'South Kensington', aliases: ['south ken', 'south kensington'] },
   { naptanId: '940GZZLUSKS', name: 'Sloane Square', aliases: ['sloane square'] },
   { naptanId: '940GZZLUERB', name: 'Edgware Road (Bakerloo)', aliases: ['edgware road'] },
+  { naptanId: '940GZZLUMVL', name: 'Maida Vale', aliases: ['maida vale'] },
+  { naptanId: '940GZZLUKSL', name: 'Kensal Green', aliases: ['kensal green'] },
+  { naptanId: '940GZZLUWYC', name: 'Wembley Central', aliases: ['wembley central'] },
   { naptanId: '940GZZLUMDN', name: 'Morden', aliases: ['morden'] },
   { naptanId: '940GZZLUSWN', name: 'Stockwell', aliases: ['stockwell'] },
   { naptanId: '940GZZLUBLG', name: 'Bethnal Green', aliases: ['bethnal green'] },
@@ -266,6 +271,376 @@ function londonNow() {
 function fmtTime24(d) {
   const h = d.getUTCHours(), m = d.getUTCMinutes();
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function londonWeekdayName() {
+  return new Intl.DateTimeFormat('en-GB', { weekday: 'long', timeZone: 'Europe/London' })
+    .format(new Date())
+    .toLowerCase();
+}
+
+// ---------------------------------------------------------------------------
+// TfL Unified API timetable helpers (scheduled services)
+// ---------------------------------------------------------------------------
+function displayStationName(input) {
+  return String(input || '')
+    .replace(/\s+(Underground|Rail|DLR|Overground) Station$/i, '')
+    .replace(/\s+Elizabeth line Station$/i, '')
+    .replace(/\s+Tram Stop$/i, '')
+    .trim();
+}
+
+function normalizeStationName(input) {
+  return displayStationName(String(input || ''))
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[.'’()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function londonScheduleKey() {
+  const weekday = londonWeekdayName();
+  if (weekday === 'friday') return 'friday';
+  if (weekday === 'saturday') return 'saturday';
+  if (weekday === 'sunday') return 'sunday';
+  return 'mondaythursday';
+}
+
+function timetableDayValue(input) {
+  const raw = String(input || 'tonight').toLowerCase().trim();
+  if (!raw || raw === 'tonight' || raw === 'today') {
+    return londonScheduleKey();
+  }
+
+  if (['monday-thursday', 'mondaythursday', 'mon-thu', 'mon-thurs', 'monday', 'mon', 'tuesday', 'tue', 'tues', 'wednesday', 'wed', 'thursday', 'thu', 'thur', 'thurs', 'weekday', 'weeknight'].includes(raw)) {
+    return 'mondaythursday';
+  }
+  if (['friday', 'fri'].includes(raw)) {
+    return 'friday';
+  }
+  if (['mondayfriday', 'monday-friday', 'mon-fri'].includes(raw)) {
+    return londonScheduleKey() === 'friday' ? 'friday' : 'mondaythursday';
+  }
+  if (['saturday', 'sat', 'saturdayalsogoodfriday', 'goodfriday', 'good-friday'].includes(raw)) {
+    return 'saturday';
+  }
+  if (['sunday', 'sun'].includes(raw)) {
+    return 'sunday';
+  }
+
+  throw new Error(`Unknown day '${input}'. Use tonight, monday-thursday, friday, saturday, or sunday.`);
+}
+
+function timetableDayLabel(value, originalInput) {
+  const raw = String(originalInput || '').toLowerCase().trim();
+  if (!raw || raw === 'tonight' || raw === 'today') {
+    return `Tonight (${value === 'mondaythursday' ? 'Monday - Thursday' : value === 'friday' ? 'Friday' : value === 'saturday' ? 'Saturday' : 'Sunday'})`;
+  }
+  if (value === 'mondaythursday') return 'Monday - Thursday';
+  if (value === 'friday') return 'Friday';
+  if (value === 'saturday') return 'Saturday';
+  if (value === 'sunday') return 'Sunday';
+  return value;
+}
+
+function timetableScheduleKey(name) {
+  const raw = String(name || '').toLowerCase();
+  if (raw.includes('saturday')) return 'saturday';
+  if (raw.includes('sunday')) return 'sunday';
+  if (raw.includes('monday') && raw.includes('thursday')) return 'mondaythursday';
+  if (raw.includes('monday') && raw.includes('friday') && !raw.includes('thursday')) return 'mondayfriday';
+  if (raw === 'friday' || raw.startsWith('friday')) return 'friday';
+  if (raw.includes('friday') && !raw.includes('good friday') && !raw.includes('monday')) return 'friday';
+  return null;
+}
+
+function selectScheduleKeys(dayKey, scheduleNames) {
+  const available = new Set(scheduleNames.map(timetableScheduleKey).filter(Boolean));
+  if (available.has(dayKey)) return new Set([dayKey]);
+  if ((dayKey === 'mondaythursday' || dayKey === 'friday') && available.has('mondayfriday')) {
+    return new Set(['mondayfriday']);
+  }
+  return new Set([dayKey]);
+}
+
+function resolveTimetableStation(input, stations) {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+
+  const exactId = stations.find(s => String(s.naptanId).toLowerCase() === raw.toLowerCase());
+  if (exactId) return { naptanId: exactId.naptanId, name: displayStationName(exactId.name) };
+
+  const q = normalizeStationName(raw);
+  const scored = [];
+  for (const station of stations) {
+    const nameNorm = normalizeStationName(station.name);
+    let score = 999;
+    if (nameNorm === q) score = 0;
+    else if (nameNorm.startsWith(q)) score = 1;
+    else if (q.startsWith(nameNorm)) score = 2;
+    else if (nameNorm.includes(q)) score = 3;
+    else if (q.split(/\s+/).every(part => nameNorm.includes(part))) score = 4;
+    else continue;
+    scored.push({ ...station, score });
+  }
+
+  scored.sort((a, b) => a.score - b.score || a.name.localeCompare(b.name));
+  if (!scored[0]) return null;
+  return { naptanId: scored[0].naptanId, name: displayStationName(scored[0].name) };
+}
+
+function mergeTimetableStations(...collections) {
+  const merged = new Map();
+  for (const collection of collections) {
+    for (const station of (collection || [])) {
+      const id = station?.naptanId || station?.id || station?.stationId;
+      const name = displayStationName(station?.name || station?.commonName || station?.stationName || id);
+      if (id && name && !merged.has(id)) {
+        merged.set(id, { naptanId: id, name });
+      }
+    }
+  }
+  return [...merged.values()];
+}
+
+function buildStationNameLookup(...collections) {
+  const map = new Map();
+  for (const collection of collections) {
+    for (const item of (collection || [])) {
+      const id = item?.naptanId || item?.id || item?.stationId;
+      const name = displayStationName(item?.name || item?.commonName || item?.stationName || id);
+      if (id && name && !map.has(id)) map.set(id, name);
+    }
+  }
+  return map;
+}
+
+async function fetchTimetableStations(lineId) {
+  const data = await fetchJSON(apiUrl(`/Line/${encodeURIComponent(lineId)}/StopPoints`), { cacheTtl: 5 * 60_000 });
+  return mergeTimetableStations(Array.isArray(data) ? data : []);
+}
+
+async function fetchLineRouteData(lineId) {
+  const encodedLine = encodeURIComponent(lineId);
+  try {
+    return await fetchJSON(apiUrl(`/Line/${encodedLine}/Route/Sequence/all`), { cacheTtl: 5 * 60_000 });
+  } catch (allErr) {
+    const results = await Promise.allSettled([
+      fetchJSON(apiUrl(`/Line/${encodedLine}/Route/Sequence/outbound`), { cacheTtl: 5 * 60_000 }),
+      fetchJSON(apiUrl(`/Line/${encodedLine}/Route/Sequence/inbound`), { cacheTtl: 5 * 60_000 }),
+    ]);
+    const fulfilled = results.filter(result => result.status === 'fulfilled').map(result => result.value);
+    if (!fulfilled.length) throw allErr;
+
+    const routeSeen = new Set();
+    const orderedLineRoutes = [];
+    for (const data of fulfilled) {
+      for (const route of (data?.orderedLineRoutes || [])) {
+        const ids = Array.isArray(route?.naptanIds) ? route.naptanIds.filter(Boolean) : [];
+        const key = ids.join('>');
+        if (ids.length < 2 || routeSeen.has(key)) continue;
+        routeSeen.add(key);
+        orderedLineRoutes.push(route);
+      }
+    }
+
+    return {
+      lineId,
+      lineName: fulfilled[0]?.lineName || lineName(lineId),
+      mode: fulfilled[0]?.mode || null,
+      stations: mergeTimetableStations(...fulfilled.map(data => data?.stations || [])),
+      orderedLineRoutes,
+      stopPointSequences: fulfilled.flatMap(data => data?.stopPointSequences || []),
+    };
+  }
+}
+
+function fmtTotalMinutes(totalMinutes) {
+  const mins = ((Number(totalMinutes) % (24 * 60)) + (24 * 60)) % (24 * 60);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function collectScheduledServices(timetableData, dayKey, destinationStopId) {
+  const stationNameById = buildStationNameLookup(timetableData?.stations || [], timetableData?.stops || []);
+  const services = [];
+  const routes = timetableData?.timetable?.routes || [];
+
+  for (const route of routes) {
+    const intervalMap = new Map((route.stationIntervals || []).map(interval => [String(interval.id), interval.intervals || []]));
+    const allowedKeys = selectScheduleKeys(dayKey, (route.schedules || []).map(schedule => schedule.name));
+    for (const schedule of (route.schedules || [])) {
+      if (!allowedKeys.has(timetableScheduleKey(schedule.name))) continue;
+
+      for (const journey of (schedule.knownJourneys || [])) {
+        const departureMinutes = (Number(journey.hour) * 60) + Number(journey.minute);
+        const intervals = intervalMap.get(String(journey.intervalId)) || [];
+        const destInterval = intervals.find(interval => interval.stopId === destinationStopId);
+        if (!destInterval) continue;
+
+        const arrivalMinutes = departureMinutes + Number(destInterval.timeToArrival || 0);
+        const terminusStopId = intervals.length ? intervals[intervals.length - 1].stopId : null;
+        const terminusName = stationNameById.get(terminusStopId) || terminusStopId || 'Unknown terminus';
+
+        services.push({
+          scheduleName: schedule.name,
+          departureTime: fmtTotalMinutes(departureMinutes),
+          arrivalTime: fmtTotalMinutes(arrivalMinutes),
+          departureMinutes,
+          arrivalMinutes,
+          intervalId: String(journey.intervalId),
+          terminates: `to ${terminusName}`,
+        });
+      }
+    }
+  }
+
+  services.sort((a, b) => a.departureMinutes - b.departureMinutes || a.arrivalMinutes - b.arrivalMinutes || a.intervalId.localeCompare(b.intervalId));
+
+  const deduped = [];
+  const seen = new Set();
+  for (const svc of services) {
+    const key = `${svc.scheduleName}|${svc.departureMinutes}|${svc.arrivalMinutes}|${svc.intervalId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(svc);
+  }
+
+  return deduped;
+}
+
+function collectRoutePaths(routeData) {
+  const seen = new Set();
+  const paths = [];
+  for (const route of (routeData?.orderedLineRoutes || [])) {
+    const ids = Array.isArray(route?.naptanIds) ? route.naptanIds.filter(Boolean) : [];
+    const key = ids.join('>');
+    if (ids.length < 2 || seen.has(key)) continue;
+    seen.add(key);
+    paths.push(ids);
+  }
+  return paths;
+}
+
+function findRouteTerminiForStation(routePaths, stationId) {
+  const termini = [];
+  const seen = new Set();
+  for (const path of routePaths) {
+    const idx = path.indexOf(stationId);
+    if (idx === -1) continue;
+
+    const candidates = [];
+    if (idx > 0) candidates.push(path[0]);
+    if (idx < path.length - 1) candidates.push(path[path.length - 1]);
+
+    for (const candidate of candidates) {
+      if (!candidate || candidate === stationId || seen.has(candidate)) continue;
+      seen.add(candidate);
+      termini.push(candidate);
+    }
+  }
+  return termini;
+}
+
+function parseStationList(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return [];
+  return raw
+    .replace(/\s+(?:vs\.?|versus)\s+/gi, ',')
+    .split(',')
+    .map(part => part.trim())
+    .filter(Boolean);
+}
+
+function shouldShowFirst(opts) {
+  return Boolean(opts.first || (!opts.first && !opts.last));
+}
+
+function shouldShowLast(opts) {
+  return Boolean(opts.last || (!opts.first && !opts.last));
+}
+
+function toPublicService(service) {
+  return {
+    departureTime: service.departureTime,
+    arrivalTime: service.arrivalTime,
+    terminates: service.terminates,
+  };
+}
+
+function summarizeServices(services, opts = {}) {
+  const publicServices = services.map(toPublicService);
+  const summary = {
+    serviceCount: publicServices.length,
+  };
+  if (opts.showFirst !== false) summary.firstService = publicServices[0] || null;
+  if (opts.showLast !== false) summary.lastService = publicServices[publicServices.length - 1] || null;
+  if (opts.includeAll) summary.services = publicServices;
+  return summary;
+}
+
+async function fetchTimetableServices(lineId, fromStation, toStation, dayKey, { swallowErrors = false } = {}) {
+  const url = apiUrl(`/Line/${encodeURIComponent(lineId)}/Timetable/${encodeURIComponent(fromStation.naptanId)}/to/${encodeURIComponent(toStation.naptanId)}`);
+  try {
+    const data = await fetchJSON(url, { cacheTtl: 60_000 });
+    return collectScheduledServices(data, dayKey, toStation.naptanId);
+  } catch (err) {
+    if (swallowErrors && /^HTTP 404/.test(err.message || '')) {
+      return [];
+    }
+    throw err;
+  }
+}
+
+function buildTimetableWindow(kind, endpoint, services, opts) {
+  return {
+    kind,
+    endpoint,
+    ...summarizeServices(services, {
+      includeAll: Boolean(opts.all),
+      showFirst: shouldShowFirst(opts),
+      showLast: shouldShowLast(opts),
+    }),
+  };
+}
+
+async function buildAtStationWindows(lineId, station, dayKey, stationsById, routePaths, opts) {
+  const terminusIds = findRouteTerminiForStation(routePaths, station.naptanId);
+  const windows = await Promise.all(terminusIds.map(async terminusId => {
+    const terminus = {
+      naptanId: terminusId,
+      name: stationsById.get(terminusId) || terminusId,
+    };
+
+    const [departureServices, arrivalServices] = await Promise.all([
+      fetchTimetableServices(lineId, station, terminus, dayKey, { swallowErrors: true }),
+      fetchTimetableServices(lineId, terminus, station, dayKey, { swallowErrors: true }),
+    ]);
+
+    return {
+      terminus,
+      departures: buildTimetableWindow('departures', terminus, departureServices, opts),
+      arrivals: buildTimetableWindow('arrivals', terminus, arrivalServices, opts),
+    };
+  }));
+
+  return windows
+    .filter(window => (window.departures.serviceCount || 0) > 0 || (window.arrivals.serviceCount || 0) > 0)
+    .sort((a, b) => a.terminus.name.localeCompare(b.terminus.name));
+}
+
+function printTimetableWindow(label, window, opts) {
+  console.log(`${label} (${window.serviceCount} service${window.serviceCount === 1 ? '' : 's'})`);
+  if (shouldShowFirst(opts)) {
+    if (window.firstService) console.log(`  First: ${window.firstService.departureTime} → ${window.firstService.arrivalTime} (${window.firstService.terminates})`);
+    else console.log('  First: none');
+  }
+  if (shouldShowLast(opts)) {
+    if (window.lastService) console.log(`  Last:  ${window.lastService.departureTime} → ${window.lastService.arrivalTime} (${window.lastService.terminates})`);
+    else console.log('  Last:  none');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -886,6 +1261,143 @@ async function cmdRouteInfo(opts) {
   }
 }
 
+// ---- Scheduled Timetable / Timetable ----
+
+async function cmdTimetable(opts) {
+  noteApiKey();
+  const targetLine = resolveLine(opts.line);
+  if (!targetLine) {
+    console.log('Provide --line with a TfL line id, e.g. bakerloo, victoria, dlr, or lioness.');
+    return;
+  }
+
+  const hasPairQuery = Boolean(opts.from || opts.to);
+  const hasStationQuery = Boolean(opts.at);
+  if ((hasPairQuery && hasStationQuery) || (!hasPairQuery && !hasStationQuery)) {
+    console.log('Choose either --at STATION[,STATION...] or --from STATION --to STATION.');
+    console.log('Example: node scripts/tfl.mjs timetable --line bakerloo --at "Maida Vale, Wembley Central" --day tonight');
+    console.log('Example: node scripts/tfl.mjs timetable --line bakerloo --from "Elephant & Castle" --to "Wembley Central" --day saturday');
+    return;
+  }
+
+  if (hasPairQuery && (!opts.from || !opts.to)) {
+    console.log('Pair lookups need both --from and --to.');
+    return;
+  }
+
+  const selectedDay = timetableDayValue(opts.day);
+  const dayLabel = timetableDayLabel(selectedDay, opts.day);
+  const routeData = await fetchLineRouteData(targetLine);
+  const timetableStations = await fetchTimetableStations(targetLine);
+  const stations = mergeTimetableStations(timetableStations, routeData?.stations || []);
+  const stationsById = buildStationNameLookup(stations);
+  const displayLineName = routeData?.lineName || lineName(targetLine);
+
+  if (hasPairQuery) {
+    const fromStation = resolveTimetableStation(opts.from, stations);
+    const toStation = resolveTimetableStation(opts.to, stations);
+
+    if (!fromStation) throw new Error(`Could not find '${opts.from}' on ${displayLineName}.`);
+    if (!toStation) throw new Error(`Could not find '${opts.to}' on ${displayLineName}.`);
+
+    const services = await fetchTimetableServices(targetLine, fromStation, toStation, selectedDay);
+    if (!services.length) {
+      if (JSON_MODE) {
+        return outputJSON({
+          line: displayLineName,
+          lineId: targetLine,
+          day: dayLabel,
+          query: { type: 'pair', from: fromStation, to: toStation },
+          serviceCount: 0,
+          source: 'tfl-unified-api-timetable',
+        });
+      }
+      console.log(`No scheduled services found for ${fromStation.name} → ${toStation.name} on ${dayLabel}.`);
+      return;
+    }
+
+    const summary = summarizeServices(services, {
+      includeAll: Boolean(opts.all),
+      showFirst: shouldShowFirst(opts),
+      showLast: shouldShowLast(opts),
+    });
+
+    if (JSON_MODE) {
+      return outputJSON({
+        line: displayLineName,
+        lineId: targetLine,
+        day: dayLabel,
+        query: { type: 'pair', from: fromStation, to: toStation },
+        source: 'tfl-unified-api-timetable',
+        ...summary,
+      });
+    }
+
+    const emoji = lineEmoji(targetLine);
+    console.log(`\n${emoji} === ${displayLineName} Timetable ===\n`);
+    console.log(`${fromStation.name} → ${toStation.name}`);
+    console.log(`Day: ${dayLabel}`);
+    console.log(`Services: ${summary.serviceCount}`);
+    if (shouldShowFirst(opts)) {
+      console.log(`First departure: ${summary.firstService ? summary.firstService.departureTime : 'none'}`);
+      console.log(`First arrival:   ${summary.firstService ? summary.firstService.arrivalTime : 'none'}`);
+      if (summary.firstService) console.log(`First service:   ${summary.firstService.terminates}`);
+    }
+    if (shouldShowLast(opts)) {
+      console.log(`Last departure:  ${summary.lastService ? summary.lastService.departureTime : 'none'}`);
+      console.log(`Last arrival:    ${summary.lastService ? summary.lastService.arrivalTime : 'none'}`);
+      if (summary.lastService) console.log(`Last service:    ${summary.lastService.terminates}`);
+    }
+    console.log();
+    return;
+  }
+
+  const stationQueries = parseStationList(opts.at);
+  if (!stationQueries.length) {
+    console.log('Provide at least one station with --at.');
+    return;
+  }
+
+  const routePaths = collectRoutePaths(routeData);
+  const stationResults = [];
+  for (const stationQuery of stationQueries) {
+    const station = resolveTimetableStation(stationQuery, stations);
+    if (!station) throw new Error(`Could not find '${stationQuery}' on ${displayLineName}.`);
+
+    const windows = await buildAtStationWindows(targetLine, station, selectedDay, stationsById, routePaths, opts);
+    stationResults.push({ station, windows });
+  }
+
+  if (JSON_MODE) {
+    return outputJSON({
+      line: displayLineName,
+      lineId: targetLine,
+      day: dayLabel,
+      query: { type: 'station', stations: stationResults.map(result => result.station) },
+      source: 'tfl-unified-api-timetable',
+      stations: stationResults,
+    });
+  }
+
+  const emoji = lineEmoji(targetLine);
+  console.log(`\n${emoji} === ${displayLineName} Timetable ===\n`);
+  console.log(`Day: ${dayLabel}\n`);
+
+  for (const result of stationResults) {
+    console.log(`${result.station.name}`);
+    if (!result.windows.length) {
+      console.log('  No scheduled arrivals or departures found.\n');
+      continue;
+    }
+
+    for (const window of result.windows) {
+      printTimetableWindow(`  Departures to ${window.terminus.name}`, window.departures, opts);
+      printTimetableWindow(`  Arrivals from ${window.terminus.name}`, window.arrivals, opts);
+      console.log();
+    }
+  }
+}
+
 // ---- Journey Planning ----
 
 async function cmdJourney(opts) {
@@ -1028,6 +1540,7 @@ Commands:
   bus-routes      List all bus routes
   stops           Search stops (--search NAME | --near LAT,LON [--radius M] | --line LINE)
   route-info      Route stops (--line LINE | --route NUM)
+  timetable       Scheduled first/last services (--line LINE (--at STATION[,STATION...] | --from STATION --to STATION) [--day tonight|monday-thursday|friday|saturday|sunday] [--first] [--last] [--all])
   journey         Plan a journey (--from PLACE --to PLACE)
 
 Global Options:
@@ -1054,6 +1567,10 @@ Environment: TFL_API_KEY (optional, free, from api-portal.tfl.gov.uk)`);
     radius: { type: 'string' },
     from: { type: 'string' },
     to: { type: 'string' },
+    at: { type: 'string' },
+    day: { type: 'string' },
+    first: { type: 'boolean' },
+    last: { type: 'boolean' },
     all: { type: 'boolean' },
     json: { type: 'boolean' },
   };
@@ -1079,6 +1596,7 @@ Environment: TFL_API_KEY (optional, free, from api-portal.tfl.gov.uk)`);
     'bus-routes': () => cmdBusRoutes(opts),
     stops: () => cmdStops(opts),
     'route-info': () => cmdRouteInfo(opts),
+    timetable: () => cmdTimetable(opts),
     journey: () => cmdJourney(opts),
   };
 

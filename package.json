@@ -1,7 +1,7 @@
 {
   "name": "tfl-skill",
   "version": "1.0.0",
-  "description": "Real-time London TfL transit data for OpenClaw. Tube arrivals, bus predictions, line status, disruptions, journey planning, and route info for the Underground, DLR, Overground, Elizabeth line, and buses.",
+  "description": "London TfL transit data for OpenClaw. Tube arrivals, bus predictions, line status, disruptions, journey planning, route info, and scheduled timetable lookups for first/last services on the Underground, DLR, Overground, Elizabeth line, and buses.",
   "main": "scripts/tfl.mjs",
   "type": "module",
   "scripts": {

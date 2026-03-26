@@ -1,6 +1,6 @@
 ---
 name: tfl
-description: London TfL transit — real-time Tube arrivals, bus predictions, line status, service disruptions, journey planning, and route info for the London Underground, DLR, Overground, Elizabeth line, and buses. Use when the user asks about London public transport, Tube times, bus arrivals, or TfL service status.
+description: London TfL transit — real-time Tube arrivals, bus predictions, line status, service disruptions, journey planning, route info, and scheduled timetable lookups for first/last services on the London Underground, DLR, Overground, Elizabeth line, and buses. Use when the user asks about London public transport, Tube times, bus arrivals, TfL service status, or scheduled first/last services.
 homepage: "https://github.com/brianleach/tfl-skill"
 license: MIT
 metadata:
@@ -15,7 +15,7 @@ metadata:
 
 # TfL London Transit
 
-Real-time London TfL transit data — Tube arrivals, bus predictions, line status, disruptions, journey planning, and route information. Uses TfL's single unified REST API for all modes. API key optional (free, recommended for higher rate limits).
+Real-time London TfL transit data — Tube arrivals, bus predictions, line status, disruptions, journey planning, route information, and scheduled timetable lookups for first/last services. Uses TfL's Unified API for live data plus route-sequence and timetable lookups for scheduled rail services. API key optional (free, recommended for higher rate limits).
 
 ## When to Use
 
@@ -27,10 +27,13 @@ Real-time London TfL transit data — Tube arrivals, bus predictions, line statu
 - User asks about TfL service status, delays, disruptions, or planned closures
 - User asks about Oyster, contactless, or TfL fares
 - User asks about journey planning in London
+- User asks about the last train / final Tube / first or last service, or scheduled arrivals/departures at a station
 
 ## Data Sources
 
-TfL has a **single unified REST API** (`api.tfl.gov.uk`) that returns JSON for ALL modes — Tube, bus, DLR, Overground, Elizabeth line, trams, river bus, cable car. No protobuf, no SIRI, no multiple feed formats. Just one clean REST API with consistent JSON responses.
+TfL has a **single unified REST API** (`api.tfl.gov.uk`) that returns JSON for live operational data across ALL modes — Tube, bus, DLR, Overground, Elizabeth line, trams, river bus, cable car. No protobuf, no SIRI, no multiple feed formats. Just one clean REST API with consistent JSON responses.
+
+For **scheduled timetable lookups**, this skill combines TfL's timetable endpoint with line route sequences. Pair lookups use `GET /Line/{lineId}/Timetable/{fromStopPointId}/to/{toStopPointId}`; station lookups fan out across termini discovered from `GET /Line/{lineId}/Route/Sequence/all`. The timetable payload returns schedule groups such as Monday - Thursday, Friday, Saturday (also Good Friday), and Sunday, plus the journey intervals needed to compute first/last services that actually reach the queried stop.
 
 **API key:** Register for a free `app_key` at https://api-portal.tfl.gov.uk/ — append `?app_key={KEY}` to requests. The API works without a key for basic usage but is rate-limited; with a key you get 500 requests per minute.
 
@@ -96,6 +99,12 @@ node scripts/tfl.mjs route-info --route 24
 # Journey planning
 node scripts/tfl.mjs journey --from "waterloo" --to "kings cross"
 node scripts/tfl.mjs journey --from "51.5031,-0.1132" --to "51.5308,-0.1238"
+
+# Scheduled timetable between stations
+node scripts/tfl.mjs timetable --line bakerloo --from "Elephant & Castle" --to "Wembley Central" --day tonight
+
+# Scheduled timetable at one or more stations
+node scripts/tfl.mjs timetable --line bakerloo --at "Maida Vale, Wembley Central" --day tonight
 ```
 
 ### Setup: API Key (Optional, Recommended)
@@ -161,6 +170,11 @@ Peak: Mon-Fri 6:30-9:30am and 4:00-7:00pm (except public holidays).
 - The `arrivals` command uses `timeToStation` (seconds) from the TfL API for ETA
 - Bus stops have their own NaPTAN IDs in `490{code}` format
 - Journey planning returns fare estimates when available
+- `timetable` uses TfL's Unified API timetable endpoint plus route sequences, so it works on TfL rail lines where timetable data is exposed through that API
+- `--day` on `timetable` accepts `tonight`, `monday-thursday`, `friday`, `saturday`, or `sunday`
+- `timetable --at` accepts a single station or a comma-separated list for side-by-side station windows
+- `timetable` shows both first and last services by default; add `--first` or `--last` to filter the summary
+- `timetable --json` returns a compact payload by default; add `--all` to include the full matching service list in JSON
 
 ### Error Handling
 
@@ -194,6 +208,7 @@ When presenting transit info to the user:
 | `api.tfl.gov.uk/Line/*/Disruption` | API key (query param, optional) | Disruptions (JSON) |
 | `api.tfl.gov.uk/Journey/JourneyResults/*` | API key (query param, optional) | Journey results (JSON) |
 | `api.tfl.gov.uk/Line/Mode/bus` | API key (query param, optional) | Bus routes (JSON) |
+| `api.tfl.gov.uk/Line/{lineId}/Timetable/{fromStopPointId}/to/{toStopPointId}` | API key (query param, optional) | Scheduled line timetable JSON for pair and station first/last service lookup |
 
 API key is passed as a query parameter to TfL's official API. No other user data is transmitted.
 

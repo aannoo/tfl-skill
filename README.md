@@ -16,6 +16,7 @@
 - Line status at a glance — check all Tube lines in one command
 - Disruption alerts — know about delays, closures, and planned work
 - Journey planning — step-by-step directions with fare estimates
+- Scheduled timetable lookups — first/last services between stations or at a station on supported TfL rail lines
 - Stop and route lookup — find the nearest stop or explore a route's path
 
 **How it works:**
@@ -99,6 +100,7 @@ Just ask your agent naturally:
 - "Any delays on the Piccadilly line?"
 - "When does the 24 bus come to Oxford Circus?"
 - "How do I get from Waterloo to King's Cross?"
+- "What are the first and last Bakerloo services at Maida Vale tonight?"
 - "Find Tube stations near Big Ben"
 - "What's the TfL status right now?"
 
@@ -149,6 +151,16 @@ node scripts/tfl.mjs journey --from "51.5031,-0.1132" --to "51.5308,-0.1238"
 node scripts/tfl.mjs stops --near 51.5074,-0.1278 --radius 500
 ```
 
+### Check Scheduled Timetables
+
+```bash
+# First/last services between two stations
+node scripts/tfl.mjs timetable --line bakerloo --from "Elephant & Castle" --to "Wembley Central" --day tonight
+
+# First/last arrivals and departures at one or more stations
+node scripts/tfl.mjs timetable --line bakerloo --at "Maida Vale, Wembley Central" --day tonight
+```
+
 ---
 
 ## Command Cheat Sheet
@@ -184,6 +196,9 @@ node scripts/tfl.mjs stops --near 51.5074,-0.1278 --radius 500
 | **Journey Planning** | |
 | Journey by name | `tfl.mjs journey --from "waterloo" --to "kings cross"` |
 | Journey by coordinates | `tfl.mjs journey --from "51.5031,-0.1132" --to "51.5308,-0.1238"` |
+| **Scheduled Timetable** | |
+| First/last services between stations | `tfl.mjs timetable --line bakerloo --from "Elephant & Castle" --to "Wembley Central" --day tonight` |
+| First/last services at a station | `tfl.mjs timetable --line bakerloo --at "Maida Vale" --day tonight` |
 
 ---
 
