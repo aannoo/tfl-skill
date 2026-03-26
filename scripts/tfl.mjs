@@ -421,41 +421,6 @@ async function fetchTimetableStations(lineId) {
   return mergeTimetableStations(Array.isArray(data) ? data : []);
 }
 
-async function fetchLineRouteData(lineId) {
-  const encodedLine = encodeURIComponent(lineId);
-  try {
-    return await fetchJSON(apiUrl(`/Line/${encodedLine}/Route/Sequence/all`), { cacheTtl: 5 * 60_000 });
-  } catch (allErr) {
-    const results = await Promise.allSettled([
-      fetchJSON(apiUrl(`/Line/${encodedLine}/Route/Sequence/outbound`), { cacheTtl: 5 * 60_000 }),
-      fetchJSON(apiUrl(`/Line/${encodedLine}/Route/Sequence/inbound`), { cacheTtl: 5 * 60_000 }),
-    ]);
-    const fulfilled = results.filter(result => result.status === 'fulfilled').map(result => result.value);
-    if (!fulfilled.length) throw allErr;
-
-    const routeSeen = new Set();
-    const orderedLineRoutes = [];
-    for (const data of fulfilled) {
-      for (const route of (data?.orderedLineRoutes || [])) {
-        const ids = Array.isArray(route?.naptanIds) ? route.naptanIds.filter(Boolean) : [];
-        const key = ids.join('>');
-        if (ids.length < 2 || routeSeen.has(key)) continue;
-        routeSeen.add(key);
-        orderedLineRoutes.push(route);
-      }
-    }
-
-    return {
-      lineId,
-      lineName: fulfilled[0]?.lineName || lineName(lineId),
-      mode: fulfilled[0]?.mode || null,
-      stations: mergeTimetableStations(...fulfilled.map(data => data?.stations || [])),
-      orderedLineRoutes,
-      stopPointSequences: fulfilled.flatMap(data => data?.stopPointSequences || []),
-    };
-  }
-}
-
 function fmtTotalMinutes(totalMinutes) {
   const mins = ((Number(totalMinutes) % (24 * 60)) + (24 * 60)) % (24 * 60);
   const h = Math.floor(mins / 60);
@@ -511,49 +476,6 @@ function collectScheduledServices(timetableData, dayKey, destinationStopId) {
   return deduped;
 }
 
-function collectRoutePaths(routeData) {
-  const seen = new Set();
-  const paths = [];
-  for (const route of (routeData?.orderedLineRoutes || [])) {
-    const ids = Array.isArray(route?.naptanIds) ? route.naptanIds.filter(Boolean) : [];
-    const key = ids.join('>');
-    if (ids.length < 2 || seen.has(key)) continue;
-    seen.add(key);
-    paths.push(ids);
-  }
-  return paths;
-}
-
-function findRouteTerminiForStation(routePaths, stationId) {
-  const termini = [];
-  const seen = new Set();
-  for (const path of routePaths) {
-    const idx = path.indexOf(stationId);
-    if (idx === -1) continue;
-
-    const candidates = [];
-    if (idx > 0) candidates.push(path[0]);
-    if (idx < path.length - 1) candidates.push(path[path.length - 1]);
-
-    for (const candidate of candidates) {
-      if (!candidate || candidate === stationId || seen.has(candidate)) continue;
-      seen.add(candidate);
-      termini.push(candidate);
-    }
-  }
-  return termini;
-}
-
-function parseStationList(input) {
-  const raw = String(input || '').trim();
-  if (!raw) return [];
-  return raw
-    .replace(/\s+(?:vs\.?|versus)\s+/gi, ',')
-    .split(',')
-    .map(part => part.trim())
-    .filter(Boolean);
-}
-
 function shouldShowFirst(opts) {
   return Boolean(opts.first || (!opts.first && !opts.last));
 }
@@ -581,66 +503,10 @@ function summarizeServices(services, opts = {}) {
   return summary;
 }
 
-async function fetchTimetableServices(lineId, fromStation, toStation, dayKey, { swallowErrors = false } = {}) {
+async function fetchTimetableServices(lineId, fromStation, toStation, dayKey) {
   const url = apiUrl(`/Line/${encodeURIComponent(lineId)}/Timetable/${encodeURIComponent(fromStation.naptanId)}/to/${encodeURIComponent(toStation.naptanId)}`);
-  try {
-    const data = await fetchJSON(url, { cacheTtl: 60_000 });
-    return collectScheduledServices(data, dayKey, toStation.naptanId);
-  } catch (err) {
-    if (swallowErrors && /^HTTP 404/.test(err.message || '')) {
-      return [];
-    }
-    throw err;
-  }
-}
-
-function buildTimetableWindow(kind, endpoint, services, opts) {
-  return {
-    kind,
-    endpoint,
-    ...summarizeServices(services, {
-      includeAll: Boolean(opts.all),
-      showFirst: shouldShowFirst(opts),
-      showLast: shouldShowLast(opts),
-    }),
-  };
-}
-
-async function buildAtStationWindows(lineId, station, dayKey, stationsById, routePaths, opts) {
-  const terminusIds = findRouteTerminiForStation(routePaths, station.naptanId);
-  const windows = await Promise.all(terminusIds.map(async terminusId => {
-    const terminus = {
-      naptanId: terminusId,
-      name: stationsById.get(terminusId) || terminusId,
-    };
-
-    const [departureServices, arrivalServices] = await Promise.all([
-      fetchTimetableServices(lineId, station, terminus, dayKey, { swallowErrors: true }),
-      fetchTimetableServices(lineId, terminus, station, dayKey, { swallowErrors: true }),
-    ]);
-
-    return {
-      terminus,
-      departures: buildTimetableWindow('departures', terminus, departureServices, opts),
-      arrivals: buildTimetableWindow('arrivals', terminus, arrivalServices, opts),
-    };
-  }));
-
-  return windows
-    .filter(window => (window.departures.serviceCount || 0) > 0 || (window.arrivals.serviceCount || 0) > 0)
-    .sort((a, b) => a.terminus.name.localeCompare(b.terminus.name));
-}
-
-function printTimetableWindow(label, window, opts) {
-  console.log(`${label} (${window.serviceCount} service${window.serviceCount === 1 ? '' : 's'})`);
-  if (shouldShowFirst(opts)) {
-    if (window.firstService) console.log(`  First: ${window.firstService.departureTime} → ${window.firstService.arrivalTime} (${window.firstService.terminates})`);
-    else console.log('  First: none');
-  }
-  if (shouldShowLast(opts)) {
-    if (window.lastService) console.log(`  Last:  ${window.lastService.departureTime} → ${window.lastService.arrivalTime} (${window.lastService.terminates})`);
-    else console.log('  Last:  none');
-  }
+  const data = await fetchJSON(url, { cacheTtl: 60_000 });
+  return collectScheduledServices(data, dayKey, toStation.naptanId);
 }
 
 // ---------------------------------------------------------------------------
@@ -1271,131 +1137,80 @@ async function cmdTimetable(opts) {
     return;
   }
 
-  const hasPairQuery = Boolean(opts.from || opts.to);
-  const hasStationQuery = Boolean(opts.at);
-  if ((hasPairQuery && hasStationQuery) || (!hasPairQuery && !hasStationQuery)) {
-    console.log('Choose either --at STATION[,STATION...] or --from STATION --to STATION.');
-    console.log('Example: node scripts/tfl.mjs timetable --line bakerloo --at "Maida Vale, Wembley Central" --day tonight');
+  if (!opts.from || !opts.to) {
+    console.log('Provide --from and --to station names on the selected line.');
     console.log('Example: node scripts/tfl.mjs timetable --line bakerloo --from "Elephant & Castle" --to "Wembley Central" --day saturday');
-    return;
-  }
-
-  if (hasPairQuery && (!opts.from || !opts.to)) {
-    console.log('Pair lookups need both --from and --to.');
     return;
   }
 
   const selectedDay = timetableDayValue(opts.day);
   const dayLabel = timetableDayLabel(selectedDay, opts.day);
-  const routeData = await fetchLineRouteData(targetLine);
-  const timetableStations = await fetchTimetableStations(targetLine);
-  const stations = mergeTimetableStations(timetableStations, routeData?.stations || []);
-  const stationsById = buildStationNameLookup(stations);
-  const displayLineName = routeData?.lineName || lineName(targetLine);
+  const stations = await fetchTimetableStations(targetLine);
+  const displayLineName = lineName(targetLine);
+  const fromStation = resolveTimetableStation(opts.from, stations);
+  const toStation = resolveTimetableStation(opts.to, stations);
 
-  if (hasPairQuery) {
-    const fromStation = resolveTimetableStation(opts.from, stations);
-    const toStation = resolveTimetableStation(opts.to, stations);
+  if (!fromStation) throw new Error(`Could not find '${opts.from}' on ${displayLineName}.`);
+  if (!toStation) throw new Error(`Could not find '${opts.to}' on ${displayLineName}.`);
 
-    if (!fromStation) throw new Error(`Could not find '${opts.from}' on ${displayLineName}.`);
-    if (!toStation) throw new Error(`Could not find '${opts.to}' on ${displayLineName}.`);
-
-    const services = await fetchTimetableServices(targetLine, fromStation, toStation, selectedDay);
-    if (!services.length) {
-      if (JSON_MODE) {
-        return outputJSON({
-          line: displayLineName,
-          lineId: targetLine,
-          day: dayLabel,
-          query: { type: 'pair', from: fromStation, to: toStation },
-          serviceCount: 0,
-          source: 'tfl-unified-api-timetable',
-        });
-      }
-      console.log(`No scheduled services found for ${fromStation.name} → ${toStation.name} on ${dayLabel}.`);
-      return;
+  let services;
+  try {
+    services = await fetchTimetableServices(targetLine, fromStation, toStation, selectedDay);
+  } catch (err) {
+    if (/^HTTP (404|500)\b/.test(err.message || '') || /No timetable found|No valid route found/i.test(err.message || '')) {
+      throw new Error(`No scheduled timetable is available for ${fromStation.name} → ${toStation.name} on ${displayLineName}. Try a different station pair or line.`);
     }
+    throw err;
+  }
 
-    const summary = summarizeServices(services, {
-      includeAll: Boolean(opts.all),
-      showFirst: shouldShowFirst(opts),
-      showLast: shouldShowLast(opts),
-    });
-
+  if (!services.length) {
     if (JSON_MODE) {
       return outputJSON({
         line: displayLineName,
         lineId: targetLine,
         day: dayLabel,
         query: { type: 'pair', from: fromStation, to: toStation },
+        serviceCount: 0,
         source: 'tfl-unified-api-timetable',
-        ...summary,
       });
     }
-
-    const emoji = lineEmoji(targetLine);
-    console.log(`\n${emoji} === ${displayLineName} Timetable ===\n`);
-    console.log(`${fromStation.name} → ${toStation.name}`);
-    console.log(`Day: ${dayLabel}`);
-    console.log(`Services: ${summary.serviceCount}`);
-    if (shouldShowFirst(opts)) {
-      console.log(`First departure: ${summary.firstService ? summary.firstService.departureTime : 'none'}`);
-      console.log(`First arrival:   ${summary.firstService ? summary.firstService.arrivalTime : 'none'}`);
-      if (summary.firstService) console.log(`First service:   ${summary.firstService.terminates}`);
-    }
-    if (shouldShowLast(opts)) {
-      console.log(`Last departure:  ${summary.lastService ? summary.lastService.departureTime : 'none'}`);
-      console.log(`Last arrival:    ${summary.lastService ? summary.lastService.arrivalTime : 'none'}`);
-      if (summary.lastService) console.log(`Last service:    ${summary.lastService.terminates}`);
-    }
-    console.log();
+    console.log(`No scheduled services found for ${fromStation.name} → ${toStation.name} on ${dayLabel}.`);
     return;
   }
 
-  const stationQueries = parseStationList(opts.at);
-  if (!stationQueries.length) {
-    console.log('Provide at least one station with --at.');
-    return;
-  }
-
-  const routePaths = collectRoutePaths(routeData);
-  const stationResults = [];
-  for (const stationQuery of stationQueries) {
-    const station = resolveTimetableStation(stationQuery, stations);
-    if (!station) throw new Error(`Could not find '${stationQuery}' on ${displayLineName}.`);
-
-    const windows = await buildAtStationWindows(targetLine, station, selectedDay, stationsById, routePaths, opts);
-    stationResults.push({ station, windows });
-  }
+  const summary = summarizeServices(services, {
+    includeAll: Boolean(opts.all),
+    showFirst: shouldShowFirst(opts),
+    showLast: shouldShowLast(opts),
+  });
 
   if (JSON_MODE) {
     return outputJSON({
       line: displayLineName,
       lineId: targetLine,
       day: dayLabel,
-      query: { type: 'station', stations: stationResults.map(result => result.station) },
+      query: { type: 'pair', from: fromStation, to: toStation },
       source: 'tfl-unified-api-timetable',
-      stations: stationResults,
+      ...summary,
     });
   }
 
   const emoji = lineEmoji(targetLine);
   console.log(`\n${emoji} === ${displayLineName} Timetable ===\n`);
-  console.log(`Day: ${dayLabel}\n`);
-
-  for (const result of stationResults) {
-    console.log(`${result.station.name}`);
-    if (!result.windows.length) {
-      console.log('  No scheduled arrivals or departures found.\n');
-      continue;
-    }
-
-    for (const window of result.windows) {
-      printTimetableWindow(`  Departures to ${window.terminus.name}`, window.departures, opts);
-      printTimetableWindow(`  Arrivals from ${window.terminus.name}`, window.arrivals, opts);
-      console.log();
-    }
+  console.log(`${fromStation.name} → ${toStation.name}`);
+  console.log(`Day: ${dayLabel}`);
+  console.log(`Services: ${summary.serviceCount}`);
+  if (shouldShowFirst(opts)) {
+    console.log(`First departure: ${summary.firstService ? summary.firstService.departureTime : 'none'}`);
+    console.log(`First arrival:   ${summary.firstService ? summary.firstService.arrivalTime : 'none'}`);
+    if (summary.firstService) console.log(`First service:   ${summary.firstService.terminates}`);
   }
+  if (shouldShowLast(opts)) {
+    console.log(`Last departure:  ${summary.lastService ? summary.lastService.departureTime : 'none'}`);
+    console.log(`Last arrival:    ${summary.lastService ? summary.lastService.arrivalTime : 'none'}`);
+    if (summary.lastService) console.log(`Last service:    ${summary.lastService.terminates}`);
+  }
+  console.log();
 }
 
 // ---- Journey Planning ----
@@ -1540,7 +1355,7 @@ Commands:
   bus-routes      List all bus routes
   stops           Search stops (--search NAME | --near LAT,LON [--radius M] | --line LINE)
   route-info      Route stops (--line LINE | --route NUM)
-  timetable       Scheduled first/last services (--line LINE (--at STATION[,STATION...] | --from STATION --to STATION) [--day tonight|monday-thursday|friday|saturday|sunday] [--first] [--last] [--all])
+  timetable       Scheduled first/last services (--line LINE --from STATION --to STATION [--day tonight|monday-thursday|friday|saturday|sunday] [--first] [--last] [--all])
   journey         Plan a journey (--from PLACE --to PLACE)
 
 Global Options:
@@ -1567,7 +1382,6 @@ Environment: TFL_API_KEY (optional, free, from api-portal.tfl.gov.uk)`);
     radius: { type: 'string' },
     from: { type: 'string' },
     to: { type: 'string' },
-    at: { type: 'string' },
     day: { type: 'string' },
     first: { type: 'boolean' },
     last: { type: 'boolean' },
@@ -1604,7 +1418,7 @@ Environment: TFL_API_KEY (optional, free, from api-portal.tfl.gov.uk)`);
     Promise.resolve(handlers[command]()).catch(err => {
       if (err.name === 'TimeoutError' || err.message?.includes('timeout')) {
         console.error('Request timed out. TfL API may be slow or unreachable. Try again in a moment.');
-      } else if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED') {
+      } else if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED' || err.cause?.code === 'ENOTFOUND' || err.cause?.code === 'ECONNREFUSED' || err.message?.includes('fetch failed')) {
         console.error('Network error: Could not reach TfL API. Check your internet connection.');
       } else if (err.message?.includes('Rate limited')) {
         console.error(err.message);
